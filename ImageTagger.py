@@ -60,6 +60,24 @@ global_mappings = None
 
 
 
+""" -- ensuring the folders exist -- """
+
+# all of our folders
+for folder in [ NEW_FOLDER,
+                GENERATION_FOLDER,
+                ORIGINALS_FOLDER,
+                DECODE_INPUT,
+                DECODE_OUTPUT]:
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+# our mapping file
+if not os.path.exists(MAPPINGS_FILE):
+    with open(MAPPINGS_FILE, 'w') as map:
+        map.write(f"{COL_OWNER},{COL_IMG_NUM},{COL_TAG_NUM}\n")
+
+
+
 """ -- Helper Functions -- """
 
 def get_mappings():
@@ -456,10 +474,10 @@ def remove_image(img_num: str) -> None:
 
 
 
-""" -- Menu Functions -- """
+""" -- Text-Based Menu Functions -- """
 
 def menu_standardize_images():
-    """move images from new to protected, giving them numerical names"""
+    """move images from new folder to generated folder, giving them numerical names"""
     print("Standardizing images")
     standardize_images(True)
 
@@ -541,8 +559,8 @@ class Menu(Enum):
 menu = {str(i+1): item for i, item in enumerate(Menu)}
 
 
-def check_menu():
-    """Prints the menu for the user and gets them to choose an option"""
+def check_menu() -> None:
+    """ Prints the menu for the user and gets them to choose an option """
     # print the menu
     print("-"*15)
     for option in menu:
@@ -562,4 +580,4 @@ def check_menu():
 
 if __name__ == "__main__":
     while True:
-        user_choice = check_menu()
+        check_menu()
