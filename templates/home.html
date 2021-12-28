@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>Image Tagger</title>
+    </head>
+    <body>
+        <ul>{% for item in menu.values() %}
+            <li>
+                <a href="{{url_for(item.value[1].__name__)}}"> {{item.value[2]}} </a>
+            </li>
+        {% endfor %}</ul>
+    </body>
+</html>
