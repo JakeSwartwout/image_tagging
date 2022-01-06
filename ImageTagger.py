@@ -16,7 +16,6 @@ changed, such as resizing, screenshotting, or compression.
 import sys
 import os
 import numpy as np
-import pandas as pd
 from enum import Enum
 from PIL import Image, ImageFilter
 
@@ -30,33 +29,26 @@ GENERATION_FOLDER = "tagged_images/"
 ORIGINALS_FOLDER = "originals_in_system/"
 DECODE_INPUT = "decoding/to_check_ownership/"
 DECODE_OUTPUT = "decoding/owner_labeled/"
-# where our mappings are stored
-MAPPINGS_FILE = "mapping.csv"
+
 # the image extension to work wiht
 EXTENSION = ".png"
 # the maximum color value allowed
 COLOR_MAX = 255
 # the offset to the pixel color to mark a positive
 COLOR_OFFSET = 10
-# how far from the desired value the pixel can be colored
-COLOR_RANGE = 5
-# the column names
-COL_IMG_NUM = "ImgNum"
-COL_TAG_NUM = "TagNum"
-COL_OWNER = "Owner"
+# the percent of the image to pad on each side (assuming they won't cut off more than 1/6th)
+PADDING_PCT = 1/6
 
 
 
 """ -- Constants calculated from above -- """
 
 # calculate the ranges we need to fit into
-ALLOWED_COLOR_MIN = COLOR_OFFSET + COLOR_RANGE
-ALLOWED_COLOR_MAX = COLOR_MAX - ALLOWED_COLOR_MIN
+ALLOWED_COLOR_MIN = COLOR_OFFSET
+ALLOWED_COLOR_MAX = COLOR_MAX - COLOR_OFFSET
 ALLOWED_COLOR_RANGE = ALLOWED_COLOR_MAX - ALLOWED_COLOR_MIN
-
-# a global variable to only load the csv once
-# the mappings dataframe to store the tags to people for each image
-global_mappings = None
+# and what percent of the image we can work in
+REMAINING_PCT = 1 - PADDING_PCT - PADDING_PCT
 
 
 
@@ -71,62 +63,15 @@ for folder in [ NEW_FOLDER,
     if not os.path.exists(folder):
         os.makedirs(folder)
 
-# our mapping file
-if not os.path.exists(MAPPINGS_FILE):
-    with open(MAPPINGS_FILE, 'w') as map:
-        map.write(f"{COL_OWNER},{COL_IMG_NUM},{COL_TAG_NUM}\n")
-
 
 
 """ -- Helper Functions -- """
 
-def get_mappings():
-    """ singleton pattern to get the mappings csv or load it in if needed """
-    global global_mappings
-    if global_mappings is None:
-        global_mappings = pd.read_csv(MAPPINGS_FILE)
-    return global_mappings
-
-
-def mappings_append(owner: str, img_num: str, tag_num: str) -> None:
-    """ edits the global mappings dataframe to append the given data """
-    global global_mappings
-    data_vals = {COL_OWNER: owner, COL_IMG_NUM: int(img_num), COL_TAG_NUM: int(tag_num)}
-    global_mappings = get_mappings().append(data_vals, ignore_index=True)
-    # save the new mappings
-    global_mappings.to_csv(MAPPINGS_FILE, index=False)
-
-
-def mappings_remove(img_num: str) -> None:
-    """ removes the given image from the mappings dataframe """
-    global global_mappings
-    mappings = get_mappings()
-    not_matching_img = mappings[COL_IMG_NUM] != int(img_num)
-    global_mappings = mappings[not_matching_img]
-    global_mappings.to_csv(MAPPINGS_FILE, index=False)
-
-
 def image_exists(folder: str, name: str) -> bool:
     """ check if an image exists in just our file system """
-    if name[:-len(EXTENSION)] != EXTENSION:
+    if name[-len(EXTENSION):] != EXTENSION:
         name += EXTENSION
     return name in os.listdir(folder)
-
-
-def image_exists_both(folder: str, name: str) -> bool:
-    """ check if an image exists both in our folder and in our database """
-    if name[:-len(EXTENSION)] == EXTENSION:
-        name_png = name
-        name_num = name[:[-len(EXTENSION)]]
-    else:
-        name_png = name + EXTENSION
-        name_num = name
-    if name_png not in os.listdir(folder):
-        return False
-    if name_num not in get_mappings()[COL_IMG_NUM].apply(str):
-        print("mappings")
-        return False
-    return True
 
 
 def open_image(folder: str, name: str) -> np.ndarray:
@@ -177,24 +122,6 @@ def find_next_open_img() -> int:
     return next_open
 
 
-def get_next_tag(img_num: str, person_name: str) -> int:
-    """
-    searches the mappings file for the next available tag for a certain image,
-    then claims that for this person
-    """
-    # load in the current values
-    mappings = get_mappings()
-    # find the next tag for that image
-    matching_image = mappings[COL_IMG_NUM] == int(img_num)
-    if not any(matching_image):
-        next_tag = 1 # don't do 0, idk why it just seems boring
-    else:
-        next_tag = 1 + max(mappings[matching_image][COL_TAG_NUM])
-    # add the ID paired with their name
-    mappings_append(person_name, img_num, next_tag)
-    return next_tag
-
-
 class Ternary:
     """ basic functionality to store a ternary value 3 trits long """
     def __init__(self, arg):
@@ -204,24 +131,43 @@ class Ternary:
             self.init_from_trits(*arg)
         elif type(arg) is list:
             self.init_from_list(arg)
+        elif type(arg) is str and len(arg) == 1:
+            self.init_from_char(arg)
         else:
             raise TypeError("Unrecognized Ternary input, takes int, tuple, or list")
     
     def init_from_int(self, value):
         self.value = value
         self.low, self.mid, self.high = Ternary.int2tern(value)
+        self.char = None
     
     def init_from_trits(self, high, mid, low):
         self.high = high
         self.mid = mid
         self.low = low
         self.value = Ternary.tern2int(high, mid, low)
+        self.char = None
         
     def init_from_list(self, lst):
         self.high = lst[0]
         self.mid = lst[1]
         self.low = lst[2]
         self.value = Ternary.tern2int(lst[0], lst[1], lst[2])
+        self.char = None
+        
+    def init_from_char(self, char):
+        # just convert into a value
+        if char.islower():
+            self.char = char
+            self.init_from_int(ord(char) - 96) # 97 = ord('a')
+        elif char.isupper():
+            self.char = char.lower()
+            self.init_from_int(ord(char) - 64) # 65 = ord('A')
+        elif char == " " or char == "_":
+            self.char = "_"
+            self.init_from_int(0) # [1-26]=>[a-z], [0]=>['_']
+        else:
+            raise ValueError("Unsupported character: " + char)
     
     def int2tern(val):
         low = val % 3
@@ -234,107 +180,174 @@ class Ternary:
     def tern2int(high, mid, low):
         return 9*high + 3*mid + low
     
+    def as_list(self):
+        return [self.high, self.mid, self.low]
+    
+    def as_char(self):
+        if self.value == 0:
+            self.char = "_"
+        else:
+            self.char = chr(self.value + 96)
+        return self.char
+    
     def __str__(self):
-        return f"{self.value} (0t{self.high}{self.mid}{self.low})"
+        if self.char:
+            return f"{self.char} (0t{self.high}{self.mid}{self.low})"
+        else:
+            return f"{self.value} (0t{self.high}{self.mid}{self.low})"
+
+
+def mean_edge(horiz_edge: np.ndarray):
+    """ given a horizontal edge of an image, finds the 6 averages of the sections """
+    boxes = np.array_split(horiz_edge, 6, axis=1)
+    return [(box.size, box.mean()) for box in boxes]
+
+
+def get_box_dims(h: int, w: int, leng: int) -> tuple[int, int, int]:
+    """
+    given a box with a known width and height, determine the rows and columns
+    needed to be able to fit <leng> squares in with them being as large as possible,
+    as well as the extra padding squares left
+    """
     
-
-def gen_rand(high: int, wide: int, trit: int) -> np.ndarray:
-    """
-    generates a random grid with high*rows and wide*columns with a range of 2 x COLOR_RANGE.
-    if the trit is 0, they are left between (-range, range)
-    if the trit is 1, they are offset to between (offset - range, offset + range)
-    if the trit is 2, they are offset to between (-offset - range, -offset + range)
-    """
-    # generate the base random grid from (-range, range)
-    rand = np.random.rand(high, wide, 3) * (COLOR_RANGE * 2) - COLOR_RANGE
-    # offset it as necessary
-    if trit == 1:
-        rand += COLOR_OFFSET
-    elif trit == 2:
-        rand -= COLOR_OFFSET
-#     elif trit == 0
-#         rand += 0
-    elif trit != 0:
-        raise ValueError("Trit must be 0, 1, or 2")
-    return rand
-
-
-def get_block_sizes(a: int, b: int, is_vertical: bool = None) -> tuple[bool, tuple[int, int], tuple[int, int]]:
-    """
-    given the two dimensions of an image, return the sizes of each block it should be split into
-    if a value is passed for is_vertical, force the image to be that direction, otherwise calculate it
-    """
-    wide = max(a, b)
-    high = min(a, b)
-    vertical = (wide == a) if (is_vertical is None) else is_vertical
-    h1 = high // 2
-    h2 = high - h1
-    w1_2 = wide // 3
-    w3 = wide - w1_2 - w1_2
-    return (vertical, (h1, h2), (w1_2, w3))
-
-
-def find_section_average(img: Image, orig_vertical: bool = None) -> tuple[np.ndarray, bool]:
-    """
-    given an image, find the averages for each section and return it in a (2, 3) numpy array
-    if a value is passed for orig_vertical, force the image to be that direction, otherwise calculate it
-    """
-    # get the block sizes
-    h, w, _ = img.shape
-    vertical, (h_1, h_2), (w_1_2, w_3) = get_block_sizes(h, w, orig_vertical)
-
-    # flip the image if its vertical
-    if vertical:
-        img = img.transpose(1, 0, 2)
+    # know that a max for the size is going to be fitting them all exactly in
+    size = int(np.sqrt(h * w / leng)) + 1
+    # the count of boxes we have
+    count = 0
     
-    # to hold our values as we find them
-    averages = np.zeros((2, 3))
+    while count <= leng and size > 0:
+        size -= 1
+        rows = h // size
+        cols = w // size
+        count = rows * cols
     
-    # the control blocks
-    # zero / none
-    averages[0, 0] = img[:h_1, :w_1_2, :].mean()
-    # one / positive
-    averages[0, 1] = img[:h_1, w_1_2:2*w_1_2, :].mean()
-    # two / negative
-    averages[0, 2] = img[:h_1, 2*w_1_2:, :].mean()
-    
-    # the encoded blocks
-    # low
-    averages[1, 0] = img[h_1:, :w_1_2, :].mean()
-    # mid
-    averages[1, 1] = img[h_1:, w_1_2:2*w_1_2, :].mean()
-    # high
-    averages[1, 2] = img[h_1:, 2*w_1_2:, :].mean()
-    
-    # convert it to integers
-    return (averages.astype(int), vertical)
+    return (rows, cols, count - leng)
 
 
-def decode_image(input_name: str) -> Ternary:
+
+def pop_extreme(img: np.ndarray, do_mimumum: bool = True) -> tuple[int, int, int]:
+    """ find the location of the minimum/maximum value in the array and set it to 127 """
+    # find the lowest
+    ndx = img.argmin() if do_mimumum else img.argmax()
+    # convert it to a multi-dimensional tuple
+    r, c, _ = np.unravel_index(ndx, img.shape)
+    # "pop" it out in all 3 color dimensions
+    img[r, c, :] = img[r-1, c-1, :]
+    
+    return (r, c)
+
+
+def decode_image(wild_name: str) -> str:
     """ decodes one image and figures out the tag for it """
-    
-    # cut down to the ending number
-    clean_input_name = input_name[input_name.rfind("_") +1 : ] if ("_" in input_name) else input_name
-    # cut off the extension
-    input_num = clean_input_name[:clean_input_name.rfind(".")]
 
-    # find the average color values for the original image
+    # do some prep work with the wild image
+    # get the wild image
+    wild_img = open_image(DECODE_INPUT, wild_name)
+    wild_h, wild_w, _ = wild_img.shape
+    
+    # find the corners of the center block (lightest and darkest pixels)
+    corners = np.array([pop_extreme(wild_img, mnmx) for _ in range(4) for mnmx in [True, False]])
+
+    # find the actual corners
+    # get the mean to find the "center"
+    g_centers = corners.mean(axis=0)
+    # split things into above or below the center
+    g_greater_cent = corners > g_centers
+    # get the median of our samples (to avoid outliers)
+    g_top_ndx = int(np.median(corners[:, 0][~g_greater_cent[:, 0]]) + .5)# where the y's are not below center
+    g_bottom_ndx = int(np.median(corners[:, 0][g_greater_cent[:, 0]]) - .5) # where the y's are below center
+    g_right_ndx = int(np.median(corners[:, 1][g_greater_cent[:, 1]]) - .5) # where the x's are righter than center
+    g_left_ndx = int(np.median(corners[:, 1][~g_greater_cent[:, 1]]) + .5) # where the x's are not righter than center
+
+
+    # load in the original image
+    # cut down to just the ending number
+    clean_input_name = wild_name[wild_name.rfind("-") +1 : ] if ("-" in wild_name) else wild_name
+
+    # open it
     lab_img = open_image(ORIGINALS_FOLDER, clean_input_name)
-    lab_avgs, orig_vertical = find_section_average(lab_img)
-
-    # find the average color values for the wild image
-    wild_img = open_image(DECODE_INPUT, input_num + EXTENSION)
-    wild_avgs, _ = find_section_average(wild_img, orig_vertical)
-
-    # compare the two
-    delta_avgs = wild_avgs - lab_avgs
-    delta_avgs -= delta_avgs[0, 0]
-
-    # find the best match for each item
-    wild_tag = [abs(delta_avgs[0] - sample).argmin() for sample in delta_avgs[1]]
+    lab_h, lab_w, _ = lab_img.shape
     
-    # convert it to a ternary output in the right order
-    return Ternary(tuple(reversed(wild_tag)))
+    # get the padding
+    lab_pad_h = int(lab_h * REMAINING_PCT)
+    lab_pad_w = int(lab_w * REMAINING_PCT)
+
+    
+    # map the two onto each other
+    # get the wild size
+    wild_pad_h = g_bottom_ndx - g_top_ndx
+    wild_pad_w = g_right_ndx - g_left_ndx
+
+    # going to scale the lab image to the wild's size
+    lab_new_h = int(lab_h * (wild_pad_h / lab_pad_h))
+    lab_new_w = int(lab_w * (wild_pad_w / lab_pad_w))
+    lab_resized = np.array(Image.fromarray(lab_img).resize((lab_new_w, lab_new_h)))
+    lab_new_pad_h = int(lab_new_h * REMAINING_PCT)
+    lab_new_pad_w = int(lab_new_w * REMAINING_PCT)
+
+    # figure out the width of the padding itself
+    lab_top_pad = (lab_new_h - lab_new_pad_h) // 2
+    lab_left_pad = (lab_new_w - lab_new_pad_w) // 2
+
+    # how much we can cut off of the lab image to get it to the wild one
+    top_cut = lab_top_pad - g_top_ndx
+    left_cut = lab_left_pad - g_left_ndx
+
+    # crop it
+    lab_crop = lab_resized[top_cut : top_cut+wild_h, left_cut : left_cut+wild_w]
+
+    # subtract the two to get the data
+    found_mask = wild_img.astype(float) - lab_crop.astype(float)
+
+
+    # extract the data from the edges
+    # collect together all of the edges
+    left_means = mean_edge(found_mask[g_top_ndx:g_bottom_ndx,  :g_left_ndx].transpose(1, 0, 2))
+    right_means = mean_edge(found_mask[g_top_ndx:g_bottom_ndx, g_right_ndx: ].transpose(1, 0, 2))
+    top_means = mean_edge(found_mask[ :g_top_ndx, g_left_ndx:g_right_ndx])
+    bottom_means = mean_edge(found_mask[g_bottom_ndx: , g_left_ndx:g_right_ndx])
+
+    edge_means = [left_means, right_means, top_means, bottom_means]
+
+    # merge them together
+    master_edge = []
+    for i in range(6):
+        total = sum(edge[i][0] * edge[i][1] for edge in edge_means)
+        count = sum(edge[i][0] for edge in edge_means)
+        master_edge.append(total / count)
+        
+    controls = master_edge[:3]
+    def decode_val(item: float) -> int:
+        return np.argmin([abs(item-cont) for cont in controls])
+
+    # decode the length of the string now
+    wild_name_len = Ternary([decode_val(test) for test in master_edge[3:]]).value + 1
+    # plus one since we go from 1-27 rather than 0-26
+
+
+    # extract the actual data
+    # find rows and columns for the the lab image so the integer math works out the same
+    wild_rows, wild_cols, _ = get_box_dims(lab_pad_h, lab_pad_w, wild_name_len * 3)
+
+    # pull out the actual data cells
+    center_data = found_mask[g_top_ndx:g_bottom_ndx, g_left_ndx:g_right_ndx].mean(axis=2) # mean over the color dimension
+
+    # split it into a grid
+    found_cells = [np.array_split(row, wild_cols, axis=1) for row in np.array_split(center_data, wild_rows, axis=0)]
+    
+    # average them all and flatten them into a single list
+    found_data = [cell.mean() for row in found_cells for cell in row]
+
+    # find the closest tag for each
+    wild_tag = [decode_val(sample) for sample in found_data][:wild_name_len*3]
+    
+    # split it into 3s and convert them to characters
+    name_chars = [Ternary(wild_tag[3*i:3*i +3]).as_char() for i in range(wild_name_len)]
+    
+    # convert back into a word
+    found_name = "".join(name_chars)
+
+    return found_name
 
 
 
@@ -370,62 +383,141 @@ def standardize_images(print_mode: bool) -> None:
         os.remove(NEW_FOLDER + img_name)
 
 
+
 def tag_image(img_name: str, person_name: str) -> str:
     """ generates a newly tagged version of that image for the requested person """
-    assert image_exists(ORIGINALS_FOLDER, img_name), "Image must exist in the file system"
-
-    #get the next tag
-    next_tag = get_next_tag(img_name, person_name)
-    tag = Ternary(next_tag)
     
+    # prep the name
+    # make sure the name is valid
+    assert len(person_name) <= 27, "Name must be 27 characters or shorter!"
+    name = person_name.lower().replace(" ", "_")
+    assert all(let == "_" or let.isalpha() for let in name), "Name has something other than a letter, space, or underscore"
+
+    # we'll need 3 spots for each letter
+    num_spots = len(name) * 3
+
+
+    # prep the image
     # open the image
-    img = open_image(ORIGINALS_FOLDER, img_name + EXTENSION)
+    assert image_exists(ORIGINALS_FOLDER, img_name), "Image must exist in the file system"
+    img = open_image(ORIGINALS_FOLDER, img_name)
     h, w, _ = img.shape
     
-    # get the sizes of the blocks
-    vertical, (h_1, h_2), (w_1_2, w_3) = get_block_sizes(h, w)
+    # cut the size down by the designated padding
+    pad_h = int(h * REMAINING_PCT)
+    pad_w = int(w * REMAINING_PCT)
+
     
-    # create the randomized blocks
-    rand = np.zeros(((h_1+h_2, w_1_2+w_1_2+w_3, 3)))
-    # the control blocks
-    # zero / none
-    rand[:h_1, :w_1_2, :] = gen_rand(h_1, w_1_2, 0)
-    # one / positive
-    rand[:h_1, w_1_2:2*w_1_2, :] = gen_rand(h_1, w_1_2, 1)
-    # two / negative
-    rand[:h_1, 2*w_1_2:, :] = gen_rand(h_1, w_3, 2)
-    # the encoded blocks
-    # low
-    rand[h_1:, :w_1_2, :] = gen_rand(h_2, w_1_2, tag.low)
-    # mid
-    rand[h_1:, w_1_2:2*w_1_2, :] = gen_rand(h_2, w_1_2, tag.mid)
-    # high
-    rand[h_1:, 2*w_1_2:, :] = gen_rand(h_2, w_3, tag.high)
-    # flip it if necessary
-    if vertical:
-        rand = rand.transpose(1, 0, 2)
+    # make the center name data
+    # get the box sizes and padding we need
+    rows, cols, box_padding = get_box_dims(pad_h, pad_w, num_spots)
+
+    # convert the name into a long string of trits
+    name_trits = [trit for letter in name for trit in Ternary(letter).as_list()]
+
+    # append our padding to the end
+    ternary_data = name_trits + [0] * box_padding
+
+    # turn this data into a matrix of color offsets
+    # make it a numpy array
+    offsets = np.array(ternary_data)
+    # reshape it into our dimensions
+    offsets = offsets.reshape(rows, cols)
+    # some math to make (0, 1, 2) into (1, 2, 0)
+    offsets = (offsets + 1) % 3 
+    # multiply by the offset
+    offsets *= COLOR_OFFSET
+    # repeat it so we have 3 color channels
+    offsets = np.repeat(offsets[:, :, np.newaxis], 3, axis=2)
+
+    # convert the array into an image temporarily so we can scale it up easily
+    as_img = Image.fromarray(offsets.astype(np.uint8))
+    as_img = as_img.resize((pad_w, pad_h), resample=Image.NEAREST)
+    offsets = np.array(as_img)
+
+
+    # make the edges/padding of control values
+    # figure out the pixel size of the padding itself
+    top_pad = (h - pad_h) // 2
+    left_pad = (w - pad_w) // 2
+
+    # make the string of control values
+    control_data = [0, 1, 2] + Ternary(len(name)).as_list()
+
+    # make our lists of arrays to store these values
+    # have it as long as the padding, then split into 6 sections
+    across = np.array_split(np.zeros(pad_w), 6)
+    # and as tall as padding, split into 6 as well
+    up = np.array_split(np.zeros(pad_h), 6)
+
+    # fill each block with the right data
+    for i in range(6):
+        across[i] += control_data[i]
+        up[i] += control_data[i]
+
+    # concatenate our arrays back together
+    control_across = np.concatenate(across)
+    control_up = np.concatenate(up)
     
-    # blur them together
-    # convert the format to use PIL's BoxBlur
-    blur = Image.fromarray((rand + ALLOWED_COLOR_MIN).astype(np.uint8))
-    rad = min(w,h) / 6
-    blur = blur.filter( ImageFilter.BoxBlur(radius=rad) )
+    # do math to scale them into the right ranges
+    control_across = ((control_across + 1) % 3 )
+    control_across *= COLOR_OFFSET
+    control_up = ((control_up + 1) % 3 )
+    control_up *= COLOR_OFFSET
+
+    # duplicate them into the dimensions they need
+    # repeat the horizontal line in both the vertical direction and the color direction
+    control_top = np.repeat(np.repeat(control_across[np.newaxis, :], repeats=(top_pad), axis=0)[:, :, np.newaxis], repeats=3, axis=2)
+    control_bottom = np.repeat(np.repeat(control_across[np.newaxis, :], repeats=(h - top_pad - pad_h), axis=0)[:, :, np.newaxis], repeats=3, axis=2)
+    # repeat this line in both the horizontal direction and the color direction
+    control_left = np.repeat(np.repeat(control_up[:, np.newaxis], repeats=(left_pad), axis=1)[:, :, np.newaxis], repeats=3, axis=2)
+    control_right = np.repeat(np.repeat(control_up[:, np.newaxis], repeats=(w - left_pad - pad_w), axis=1)[:, :, np.newaxis], repeats=3, axis=2)
+
+
+    # combine everything back together into a single mask
+    # the base image should be 0 change, but right now we're shifted up by COLOR_OFFSET
+    mask = np.zeros(img.shape, dtype=np.uint8) + COLOR_OFFSET
+
+    # add in our border around it
+    mask[top_pad:top_pad+pad_h, 0:left_pad, :] = control_left
+    mask[top_pad:top_pad+pad_h, left_pad+pad_w:, :] = control_right
+    mask[0:top_pad, left_pad:left_pad+pad_w, :] = control_top
+    mask[top_pad+pad_h:, left_pad:left_pad+pad_w, :] = control_bottom
+
+    # put our offsets into the middle
+    mask[top_pad:top_pad+pad_h, left_pad:left_pad+pad_w, :] = offsets
+
+    # blur our mask
+    radius = int(min([pad_h/rows, pad_w/cols, pad_h/6, pad_w/6]) / 3)
+    mask = np.array(Image.fromarray(mask).filter(ImageFilter.BoxBlur(radius=radius))) # (box) size is 57
+
+
+    # create the final image
+    # merge the original image and the mask, making sure to watch for the numbers signs
+    out_img = (img.copy().astype(int) + mask - COLOR_OFFSET).astype(np.uint8)
+
+    # mark the corners with a single pure white pixel on the horizontal outside of the bounds
+    for i in [-1, 1]:
+        for j in [-1, 1]:
+            out_img[i * top_pad, j*(left_pad-1)] = 255
+    # mark the corners with a single pure black pixel on the vertical outside of the bounds
+    for i in [-1, 1]:
+        for j in [-1, 1]:
+            out_img[i * (top_pad-1), j*left_pad] = 0
     
-    # add the randomness to the image
-    done = img + np.asarray(blur) - ALLOWED_COLOR_MIN
-    
-    # save the image
-    tagged_image_name = person_name + "_" + img_name + EXTENSION
-    Image.fromarray(done).save(GENERATION_FOLDER + tagged_image_name)
-    
-    # tell them where it is
+
+    # give back the results
+    # convert back to an image and save it
+    tagged_image_name = name + "-" + img_name
+    Image.fromarray(out_img).save(GENERATION_FOLDER + tagged_image_name)
+
     return tagged_image_name
+
 
 
 def decode_images(print_mode: bool) -> None:
     """ goes through our decoder's input folder and figures out who took them all """
-    mappings = get_mappings()
-
+    
     decode_inputs = os.listdir(DECODE_INPUT)
 
     if print_mode and len(decode_inputs) == 0:
@@ -440,19 +532,11 @@ def decode_images(print_mode: bool) -> None:
 
         img_tag = decode_image(input_name)
 
-        where_img = ( mappings["ImgNum"] == int(clean_input_name[:-len(EXTENSION)]) )
-        where_tag = ( mappings["TagNum"] == img_tag.value )
-        owners = mappings[where_img & where_tag]["Owner"]
-        assert len(owners) == 1, "Found the wrong number of image owners! Found: " + str(len(owners)) + " for img " + input_name + " and tag " + str(img_tag)
-        found_owner = owners.values[0]
-
         if print_mode:
-            print("Owner found to be", found_owner)
+            print("Owner found to be", img_tag)
 
         # label the image
-        user_name = input_name[:-(1 + len(clean_input_name))] # get the first, user-given part of the name
-        new_name = user_name + "(Owner-" + found_owner + ")_" + clean_input_name
-        os.rename(DECODE_INPUT + input_name, DECODE_OUTPUT + new_name)
+        os.rename(DECODE_INPUT + input_name, DECODE_OUTPUT + img_tag + "-" + input_name)
 
 
 def remove_image(img_num: str) -> None:
@@ -461,13 +545,10 @@ def remove_image(img_num: str) -> None:
     # first remove our tagged images
     all_tagged = os.listdir(GENERATION_FOLDER)
     def get_num(img_name):
-        return img_name[img_name.rfind("_") +1 : -len(EXTENSION)]
+        return img_name[img_name.rfind("-") +1 : -len(EXTENSION)]
     for image in all_tagged:
         if get_num(image) == img_num:
             os.remove(GENERATION_FOLDER + image)
-
-    # remove from the database
-    mappings_remove(img_num)
 
     # remove from our originals folder
     os.remove(ORIGINALS_FOLDER + img_num + EXTENSION)
@@ -495,8 +576,8 @@ def menu_generate_new_id():
     img_valid = False
     while not img_valid:
         img_name = input()
-        if img_name[-4:] == EXTENSION:
-            img_name = img_name[:-len(EXTENSION)]
+        if img_name[-4:] != EXTENSION:
+            img_name += EXTENSION
         img_valid = image_exists(ORIGINALS_FOLDER, img_name)
         if not img_valid:
             print("Image must exist in the file system")
