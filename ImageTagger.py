@@ -390,6 +390,7 @@ def tag_image(img_name: str, person_name: str) -> str:
     # prep the name
     # make sure the name is valid
     assert len(person_name) <= 27, "Name must be 27 characters or shorter!"
+    assert len(person_name) > 0, "Must actually provide a name!"
     name = person_name.lower().replace(" ", "_")
     assert all(let == "_" or let.isalpha() for let in name), "Name has something other than a letter, space, or underscore"
 
@@ -441,8 +442,9 @@ def tag_image(img_name: str, person_name: str) -> str:
     top_pad = (h - pad_h) // 2
     left_pad = (w - pad_w) // 2
 
-    # make the string of control values
-    control_data = [0, 1, 2] + Ternary(len(name)).as_list()
+    # make the string of control values, reference values and the length of the name
+    # subtract one from the name length to do 1-27 rather than 0-26
+    control_data = [0, 1, 2] + Ternary(len(name) - 1).as_list()
 
     # make our lists of arrays to store these values
     # have it as long as the padding, then split into 6 sections
@@ -582,12 +584,27 @@ def menu_generate_new_id():
         if not img_valid:
             print("Image must exist in the file system")
 
-    print("What name should we log it under?")
+    keep_whiling = True
+    print("What names should we log it under?")
     person_name = input()
 
-    new_img_name = tag_image(img_name, person_name)
+    while keep_whiling:
+        try:
+            new_img_name = tag_image(img_name, person_name)
+        except AssertionError as e:
+            print(e)
+            return
+        except:
+            print("An unknown error has occurred!")
+            return
 
-    print("Generated a new version of image", img_name, "for", person_name + ". It's named", new_img_name)
+        print("Generated a new version of image", img_name, "for", person_name + ". It's named", new_img_name)
+
+        print("Next name? (leave it blank to end)")
+        person_name = input()
+        keep_whiling = (person_name != "")
+
+    # done
 
 
 def menu_check_id():
