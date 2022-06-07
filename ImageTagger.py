@@ -44,8 +44,8 @@ PADDING_PCT = 1/6
 """ -- Constants calculated from above -- """
 
 # calculate the ranges we need to fit into
-ALLOWED_COLOR_MIN = COLOR_OFFSET
-ALLOWED_COLOR_MAX = COLOR_MAX - COLOR_OFFSET
+ALLOWED_COLOR_MIN = COLOR_OFFSET + 1
+ALLOWED_COLOR_MAX = COLOR_MAX - COLOR_OFFSET - 1
 ALLOWED_COLOR_RANGE = ALLOWED_COLOR_MAX - ALLOWED_COLOR_MIN
 # and what percent of the image we can work in
 REMAINING_PCT = 1 - PADDING_PCT - PADDING_PCT
@@ -227,10 +227,12 @@ def get_box_dims(h: int, w: int, leng: int) -> tuple[int, int, int]:
 
 def pop_extreme(img: np.ndarray, do_mimumum: bool = True) -> tuple[int, int, int]:
     """ find the location of the minimum/maximum value in the array and set it to 127 """
+    # sum the colors to just a brightness value
+    colors = img.sum(axis=2)
     # find the lowest
-    ndx = img.argmin() if do_mimumum else img.argmax()
+    ndx = colors.argmin() if do_mimumum else colors.argmax()
     # convert it to a multi-dimensional tuple
-    r, c, _ = np.unravel_index(ndx, img.shape)
+    r, c = np.unravel_index(ndx, colors.shape)
     # "pop" it out in all 3 color dimensions
     img[r, c, :] = img[r-1, c-1, :]
     
@@ -249,15 +251,15 @@ def decode_image(wild_name: str) -> str:
     corners = np.array([pop_extreme(wild_img, mnmx) for _ in range(4) for mnmx in [True, False]])
 
     # find the actual corners
-    # get the mean to find the "center"
+    # get the mean to find the "center" of the entire box
     g_centers = corners.mean(axis=0)
-    # split things into above or below the center
+    # split things into above or below the center (also left or right)
     g_greater_cent = corners > g_centers
     # get the median of our samples (to avoid outliers)
-    g_top_ndx = int(np.median(corners[:, 0][~g_greater_cent[:, 0]]) + .5)# where the y's are not below center
-    g_bottom_ndx = int(np.median(corners[:, 0][g_greater_cent[:, 0]]) - .5) # where the y's are below center
-    g_right_ndx = int(np.median(corners[:, 1][g_greater_cent[:, 1]]) - .5) # where the x's are righter than center
-    g_left_ndx = int(np.median(corners[:, 1][~g_greater_cent[:, 1]]) + .5) # where the x's are not righter than center
+    g_top_ndx    = int(np.median(corners[:, 0][~g_greater_cent[:, 0]]) + .5) # where the y's are not below center
+    g_bottom_ndx = int(np.median(corners[:, 0][ g_greater_cent[:, 0]]) - .5) # where the y's are below center
+    g_right_ndx  = int(np.median(corners[:, 1][ g_greater_cent[:, 1]]) - .5) # where the x's are righter than center
+    g_left_ndx   = int(np.median(corners[:, 1][~g_greater_cent[:, 1]]) + .5) # where the x's are not righter than center
 
 
     # load in the original image
@@ -677,5 +679,8 @@ def check_menu() -> None:
 """ -- Main function -- """
 
 if __name__ == "__main__":
+    if len(sys.argv) == 2:
+        menu[sys.argv[1]].value[1]()
+        sys.exit(0)
     while True:
         check_menu()
